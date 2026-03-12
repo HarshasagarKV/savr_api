@@ -8,7 +8,9 @@ const {
   adminUsersQuerySchema,
   paginationQuerySchema,
   adminOrdersQuerySchema,
-  statusUpdateSchema
+  statusUpdateSchema,
+  createRestaurantSchema,
+  updateRestaurantSchema
 } = require('../validators/admin.validator');
 
 const router = express.Router();
@@ -23,6 +25,13 @@ router.get(
   validate(paginationQuerySchema, 'query'),
   asyncHandler(adminController.listRestaurants)
 );
+router.post('/restaurants', validate(createRestaurantSchema), asyncHandler(adminController.createRestaurant));
+router.patch(
+  '/restaurants/:id',
+  validate(updateRestaurantSchema),
+  asyncHandler(adminController.updateRestaurant)
+);
+router.delete('/restaurants/:id', asyncHandler(adminController.deleteRestaurant));
 router.patch(
   '/restaurants/:id/status',
   validate(statusUpdateSchema),

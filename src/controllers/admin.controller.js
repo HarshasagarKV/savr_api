@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const Restaurant = require('../models/Restaurant');
+const MenuItem = require('../models/MenuItem');
 const Order = require('../models/Order');
 const { successResponse } = require('../utils/apiResponse');
 
@@ -104,6 +105,123 @@ async function listRestaurants(req, res) {
   });
 }
 
+async function createRestaurant(req, res) {
+  const payload = req.body;
+  const loginPhone = payload.loginPhone || payload.phone;
+
+  const existingLoginUser = await User.findOne({ phone: loginPhone });
+  if (existingLoginUser && existingLoginUser.role !== 'restaurant') {
+    const error = new Error('loginPhone is already used by a non-restaurant account');
+    error.statusCode = 409;
+    throw error;
+  }
+
+  if (existingLoginUser?.restaurantId) {
+    const error = new Error('Restaurant login user is already linked to a restaurant');
+    error.statusCode = 409;
+    throw error;
+  }
+
+  let restaurant;
+  try {
+    restaurant = await Restaurant.create({
+      storeName: payload.storeName,
+      ownerName: payload.ownerName,
+      phone: payload.phone,
+      email: payload.email,
+      address: payload.address,
+      cuisine: payload.cuisine,
+      openTimeEpoch: payload.openTimeEpoch,
+      closeTimeEpoch: payload.closeTimeEpoch,
+      latitude: payload.latitude,
+      longitude: payload.longitude,
+      imageUrl: payload.imageUrl ?? null
+    });
+
+    let restaurantUser = existingLoginUser;
+    if (!restaurantUser) {
+      restaurantUser = await User.create({
+        phone: loginPhone,
+        role: 'restaurant',
+        firstName: payload.ownerName,
+        restaurantId: restaurant._id,
+        isActive: true
+      });
+    } else {
+      restaurantUser.restaurantId = restaurant._id;
+      restaurantUser.isActive = true;
+      await restaurantUser.save();
+    }
+
+    return successResponse(
+      res,
+      'Restaurant created successfully',
+      {
+        restaurant,
+        restaurantUser: {
+          id: restaurantUser._id,
+          phone: restaurantUser.phone,
+          role: restaurantUser.role,
+          restaurantId: restaurantUser.restaurantId
+        }
+      },
+      201
+    );
+  } catch (error) {
+    if (restaurant?._id) {
+      await Restaurant.deleteOne({ _id: restaurant._id });
+    }
+    throw error;
+  }
+}
+
+async function updateRestaurant(req, res) {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    const error = new Error('Invalid restaurant id');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const restaurant = await Restaurant.findByIdAndUpdate(id, req.body, { new: true });
+  if (!restaurant) {
+    const error = new Error('Restaurant not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return successResponse(res, 'Restaurant updated successfully', restaurant);
+}
+
+async function deleteRestaurant(req, res) {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    const error = new Error('Invalid restaurant id');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const restaurant = await Restaurant.findById(id);
+  if (!restaurant) {
+    const error = new Error('Restaurant not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  await Promise.all([
+    Restaurant.deleteOne({ _id: id }),
+    MenuItem.deleteMany({ restaurantId: id }),
+    User.updateMany(
+      { restaurantId: id, role: 'restaurant' },
+      { $set: { isActive: false, restaurantId: null } }
+    )
+  ]);
+
+  return successResponse(res, 'Restaurant deleted successfully', { id });
+}
+
 async function updateRestaurantStatus(req, res) {
   const { id } = req.params;
   const { isActive } = req.body;
@@ -151,6 +269,9 @@ module.exports = {
   listUsers,
   updateUserStatus,
   listRestaurants,
+  createRestaurant,
+  updateRestaurant,
+  deleteRestaurant,
   updateRestaurantStatus,
   listOrders
 };

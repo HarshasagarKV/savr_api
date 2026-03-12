@@ -9,7 +9,7 @@ const requestOtpSchema = z.object({
 
 const verifyOtpSchema = z.object({
   phone: z.string().regex(phoneRegex, 'Invalid phone format'),
-  role: z.enum(['user', 'restaurant']),
+  role: z.enum(['user', 'restaurant', 'admin']),
   requestId: z.string().min(6),
   otp: z.string().regex(/^\d{6}$/, 'OTP must be 6 digits'),
   fcmToken: z.string().min(10).max(4096).optional()
