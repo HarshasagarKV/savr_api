@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const OtpSession = require('../models/OtpSession');
 const User = require('../models/User');
+const Restaurant = require('../models/Restaurant');
 const RefreshToken = require('../models/RefreshToken');
 const { successResponse } = require('../utils/apiResponse');
 const { generateOtp, hashOtp, compareOtp, getOtpExpiryDate } = require('../utils/otp');
@@ -28,11 +29,40 @@ async function requestOtp(req, res) {
   const isHardcodedAdminRestaurantLogin = role === 'restaurant' && phone === HARD_CODED_ADMIN_PHONE;
 
   if (role === 'restaurant' && !isHardcodedAdminRestaurantLogin) {
-    const restaurantUser = await User.findOne({ phone, role: 'restaurant' });
-    if (!restaurantUser) {
-      const error = new Error('Restaurant account does not exist for this phone');
-      error.statusCode = 404;
+    const userByPhone = await User.findOne({ phone });
+    let restaurantUser = userByPhone?.role === 'restaurant' ? userByPhone : null;
+
+    if (userByPhone && userByPhone.role !== 'restaurant') {
+      const error = new Error('Phone is already used by a non-restaurant account');
+      error.statusCode = 409;
       throw error;
+    }
+
+    if (!restaurantUser) {
+      const restaurant = await Restaurant.findOne({ phone });
+      if (!restaurant) {
+        const error = new Error('Restaurant account does not exist for this phone');
+        error.statusCode = 404;
+        throw error;
+      }
+
+      restaurantUser = await User.create({
+        phone,
+        role: 'restaurant',
+        firstName: restaurant.ownerName || '',
+        restaurantId: restaurant._id,
+        isActive: restaurant.isActive
+      });
+    } else if (!restaurantUser.restaurantId) {
+      const restaurant = await Restaurant.findOne({ phone });
+      if (!restaurant) {
+        const error = new Error('Restaurant account does not exist for this phone');
+        error.statusCode = 404;
+        throw error;
+      }
+
+      restaurantUser.restaurantId = restaurant._id;
+      await restaurantUser.save();
     }
   }
 
